@@ -1,0 +1,180 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>売れた価格チェッカー</title>
+<meta name="theme-color" content="#1f6feb">
+<link rel="manifest" href="manifest.json">
+<link rel="icon" href="icon.svg" type="image/svg+xml">
+<link rel="apple-touch-icon" href="icon.svg">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-title" content="売れた価格">
+<style>
+  :root {
+    --bg: #f5f6f8; --card: #fff; --text: #1b1f24; --sub: #667085;
+    --line: #e3e6ea; --accent: #1f6feb;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root { --bg: #0f1115; --card: #1a1d23; --text: #e8eaed; --sub: #9aa1ac; --line: #2a2e36; }
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; background: var(--bg); color: var(--text);
+    font-family: -apple-system, BlinkMacSystemFont, "Hiragino Sans", "Noto Sans JP", sans-serif;
+    padding: env(safe-area-inset-top) 16px calc(24px + env(safe-area-inset-bottom));
+  }
+  main { max-width: 560px; margin: 0 auto; }
+  h1 { font-size: 20px; margin: 20px 0 4px; }
+  .lead { color: var(--sub); font-size: 13px; margin: 0 0 16px; }
+  form { display: flex; gap: 8px; position: sticky; top: 0; padding: 8px 0; background: var(--bg); z-index: 1; }
+  input[type=search] {
+    flex: 1; font-size: 17px; padding: 14px; border-radius: 12px;
+    border: 1px solid var(--line); background: var(--card); color: var(--text); min-width: 0;
+  }
+  button.go {
+    font-size: 16px; padding: 0 18px; border: 0; border-radius: 12px;
+    background: var(--accent); color: #fff; font-weight: 600;
+  }
+  .history { display: flex; flex-wrap: wrap; gap: 6px; margin: 4px 0 16px; }
+  .chip {
+    font-size: 13px; padding: 6px 10px; border-radius: 999px;
+    background: var(--card); border: 1px solid var(--line); color: var(--text);
+  }
+  .chip.clear { color: var(--sub); }
+  .list { display: grid; gap: 10px; }
+  a.site {
+    display: flex; align-items: center; gap: 12px; text-decoration: none; color: var(--text);
+    background: var(--card); border: 1px solid var(--line); border-radius: 14px; padding: 14px;
+  }
+  a.site[aria-disabled=true] { opacity: .45; pointer-events: none; }
+  .badge {
+    flex: none; width: 44px; height: 44px; border-radius: 10px; display: grid; place-items: center;
+    color: #fff; font-weight: 700; font-size: 13px;
+  }
+  .info { flex: 1; min-width: 0; }
+  .name { font-weight: 600; font-size: 16px; }
+  .desc { color: var(--sub); font-size: 12px; margin-top: 2px; }
+  .tag { flex: none; font-size: 11px; padding: 3px 8px; border-radius: 6px; font-weight: 600; }
+  .tag.sold { background: #e6f4ea; color: #137333; }
+  .tag.list { background: #eef1f5; color: #5f6b7a; }
+  @media (prefers-color-scheme: dark) {
+    .tag.sold { background: #173b24; color: #81c995; }
+    .tag.list { background: #2a2e36; color: #9aa1ac; }
+  }
+  .note { color: var(--sub); font-size: 12px; margin-top: 20px; line-height: 1.6; }
+</style>
+</head>
+<body>
+<main>
+  <h1>売れた価格チェッカー</h1>
+  <p class="lead">商品名を入れると、各サイトの「売れた・落札された」結果を直接開けます。</p>
+
+  <form id="f">
+    <input id="q" type="search" placeholder="商品名・型番を入力" autocomplete="off" enterkeyhint="search">
+    <button class="go" type="submit">検索</button>
+  </form>
+
+  <div class="history" id="history"></div>
+
+  <div class="list" id="list"></div>
+
+  <p class="note">
+    ・<b>売れた</b>：実際に売れた／落札された価格が見られます<br>
+    ・<b>販売中</b>：楽天・Yahoo!ショッピングは売れた価格が公開されていないため、安い順の販売価格を表示します<br>
+    ・Keepaは無料会員だと一部の表示が制限されます。Amazonの価格推移を見るときに使ってください
+  </p>
+</main>
+
+<script>
+const SITES = [
+  {
+    name: "ヤフオク", desc: "落札相場（終了が新しい順）", color: "#ff0033", label: "ヤフ", sold: true,
+    url: q => `https://auctions.yahoo.co.jp/closedsearch/closedsearch?p=${q}&va=${q}&b=1&n=50`
+  },
+  {
+    name: "メルカリ", desc: "売り切れのみ（新しい順）", color: "#ff4f50", label: "メル", sold: true,
+    url: q => `https://jp.mercari.com/search?keyword=${q}&status=sold_out&sort=created_time&order=desc`
+  },
+  {
+    name: "Keepa（Amazon）", desc: "Amazonの価格推移・ランキング", color: "#2c3e50", label: "Kp", sold: true, tagText: "推移",
+    url: q => `https://keepa.com/#!search/5-${q}`
+  },
+  {
+    name: "Amazon", desc: "Amazon.co.jp の検索結果", color: "#ff9900", label: "Am", sold: false,
+    url: q => `https://www.amazon.co.jp/s?k=${q}`
+  },
+  {
+    name: "楽天市場", desc: "価格の安い順", color: "#bf0000", label: "楽天", sold: false,
+    url: q => `https://search.rakuten.co.jp/search/mall/${q}/?s=2`
+  },
+  {
+    name: "Yahoo!ショッピング", desc: "価格の安い順", color: "#7c3aed", label: "Yショ", sold: false,
+    url: q => `https://shopping.yahoo.co.jp/search?p=${q}&X=2`
+  },
+];
+
+const $q = document.getElementById("q");
+const $list = document.getElementById("list");
+const $history = document.getElementById("history");
+const HKEY = "price-search-history";
+
+function render(keyword) {
+  const enc = encodeURIComponent(keyword.trim());
+  $list.innerHTML = "";
+  for (const s of SITES) {
+    const a = document.createElement("a");
+    a.className = "site";
+    a.target = "_blank";
+    a.rel = "noopener";
+    if (enc) a.href = s.url(enc); else a.setAttribute("aria-disabled", "true");
+    a.innerHTML = `
+      <span class="badge" style="background:${s.color}">${s.label}</span>
+      <span class="info"><div class="name">${s.name}</div><div class="desc">${s.desc}</div></span>
+      <span class="tag ${s.sold ? "sold" : "list"}">${s.tagText || (s.sold ? "売れた" : "販売中")}</span>`;
+    $list.appendChild(a);
+  }
+}
+
+function loadHistory() {
+  try { return JSON.parse(localStorage.getItem(HKEY)) || []; } catch { return []; }
+}
+function saveHistory(word) {
+  const h = [word, ...loadHistory().filter(x => x !== word)].slice(0, 10);
+  localStorage.setItem(HKEY, JSON.stringify(h));
+  renderHistory();
+}
+function renderHistory() {
+  const h = loadHistory();
+  $history.innerHTML = "";
+  for (const w of h) {
+    const b = document.createElement("button");
+    b.className = "chip"; b.type = "button"; b.textContent = w;
+    b.onclick = () => { $q.value = w; render(w); saveHistory(w); };
+    $history.appendChild(b);
+  }
+  if (h.length) {
+    const c = document.createElement("button");
+    c.className = "chip clear"; c.type = "button"; c.textContent = "履歴を消す";
+    c.onclick = () => { localStorage.removeItem(HKEY); renderHistory(); };
+    $history.appendChild(c);
+  }
+}
+
+$q.addEventListener("input", () => render($q.value));
+document.getElementById("f").addEventListener("submit", e => {
+  e.preventDefault();
+  const w = $q.value.trim();
+  if (!w) return;
+  render(w); saveHistory(w); $q.blur();
+});
+
+render("");
+renderHistory();
+
+if ("serviceWorker" in navigator) {
+  navigator.serviceWorker.register("sw.js").catch(() => {});
+}
+</script>
+</body>
+</html>
